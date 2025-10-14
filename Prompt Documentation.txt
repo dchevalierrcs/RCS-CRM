@@ -1,0 +1,25 @@
+Sujet : Génération d'une documentation technique en Markdown pour un site web.
+
+Contexte : Je souhaite créer une documentation technique complète pour un site web développé en local. Je ne suis pas un développeur professionnel et je ne peux que répondre à des questions ou fournir des extraits de code et des fichiers. Le but est de documenter l'installation, la structure du projet (frontend/backend), la base de données, les dépendances, et les technologies utilisées.
+
+Instructions :
+
+Pose-moi des questions de manière progressive. Commence par les informations générales et progresse vers les détails techniques.
+
+Spécificité : Adapte tes questions à ce que je peux fournir : copier/coller le contenu de fichiers, des commandes de terminal, ou des informations que je peux trouver dans mes dossiers.
+
+Format de la documentation : La documentation finale doit être en Markdown, avec des titres clairs (##), des listes, et des blocs de code pour une lecture facile.
+
+Contenu requis : La documentation doit couvrir les sections suivantes :
+
+Installation : Instructions étape par étape pour configurer le projet en local.
+
+Technologies et Dépendances : Liste des langages de programmation, frameworks, et bibliothèques utilisés.
+
+Structure du Projet : Description de l'arborescence des fichiers et des dossiers (frontend et backend).
+
+Base de Données : Détails sur la base de données PostgreSQL, y compris le schéma des tables.
+
+Scripts Utiles : Liste des commandes pour lancer le serveur, exécuter les tests, etc.
+
+Fonctionnalités Clés : Brève description des principales fonctionnalités du site.
