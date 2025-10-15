@@ -5,12 +5,11 @@ const pool = require('../config/database');
 const checkRole = require('../middleware/roles');
 
 // @route   GET /api/products
-// @desc    Récupérer la liste de tous les produits (peut être filtré par type)
-// @access  Private
+// @desc    Récupérer la liste de tous les produits
 router.get('/', async (req, res) => {
   try {
     const searchTerm = req.query.search ? `%${req.query.search}%` : '%';
-    const productType = req.query.product_type; // Amélioration : filtrage par type
+    const productType = req.query.product_type;
 
     let whereClauses = ["(p.name ILIKE $1 OR p.reference ILIKE $1 OR p.internal_label ILIKE $1)"];
     const queryParams = [searchTerm];
@@ -20,8 +19,6 @@ router.get('/', async (req, res) => {
       whereClauses.push(`p.product_type = $${queryParams.length}`);
     }
     
-    // Le CDC ne mentionne pas hourly_rate_ht ou annual_price_ht dans la table products.
-    // La requête est mise à jour pour ne sélectionner que les colonnes existantes.
     const query = `
       SELECT 
         p.id, p.reference, p.name, p.name_en, p.internal_label, p.description, p.description_en, p.product_type, 
@@ -44,8 +41,7 @@ router.get('/', async (req, res) => {
 });
 
 // @route   POST /api/products
-// @desc    Créer un nouveau produit ou add-on
-// @access  Private (Admin/Editor)
+// @desc    Créer un nouveau produit
 router.post('/', checkRole(['admin', 'editor']), async (req, res) => {
   let { 
     reference, name, name_en, internal_label, description, description_en, product_type, 
@@ -57,17 +53,14 @@ router.post('/', checkRole(['admin', 'editor']), async (req, res) => {
     return res.status(400).json({ success: false, message: 'La référence, le nom et le type de produit sont requis.' });
   }
   
-  // Logique de nettoyage des données pour garantir la cohérence
   if (product_type === 'MATERIEL') {
     daily_rate_ht = null;
   } else if (product_type === 'FORMATION' || product_type === 'PRESTATION_SERVICE') {
     unit_price_ht = null;
-  } else {
-    // Pour tout autre type, on s'assure que les champs de prix sont nuls
+  } else { // ADDON
     daily_rate_ht = null;
     unit_price_ht = null;
   }
-
 
   const is_addon = product_type === 'ADDON';
   if (!is_addon) {
@@ -98,8 +91,7 @@ router.post('/', checkRole(['admin', 'editor']), async (req, res) => {
 });
 
 // @route   PUT /api/products/:id
-// @desc    Mettre à jour un produit ou add-on
-// @access  Private (Admin/Editor)
+// @desc    Mettre à jour un produit
 router.put('/:id', checkRole(['admin', 'editor']), async (req, res) => {
   const { id } = req.params;
   let { 
@@ -112,12 +104,11 @@ router.put('/:id', checkRole(['admin', 'editor']), async (req, res) => {
     return res.status(400).json({ success: false, message: 'La référence, le nom et le type de produit sont requis.' });
   }
   
-  // Logique de nettoyage des données pour garantir la cohérence lors de la mise à jour
   if (product_type === 'MATERIEL') {
     daily_rate_ht = null;
   } else if (product_type === 'FORMATION' || product_type === 'PRESTATION_SERVICE') {
     unit_price_ht = null;
-  } else {
+  } else { // ADDON
     daily_rate_ht = null;
     unit_price_ht = null;
   }
@@ -158,8 +149,7 @@ router.put('/:id', checkRole(['admin', 'editor']), async (req, res) => {
 });
 
 // @route   DELETE /api/products/:id
-// @desc    Archiver/Restaurer un produit (bascule is_active)
-// @access  Private (Admin/Editor)
+// @desc    Archiver/Restaurer un produit
 router.delete('/:id', checkRole(['admin', 'editor']), async (req, res) => {
   const { id } = req.params;
   try {
@@ -167,7 +157,6 @@ router.delete('/:id', checkRole(['admin', 'editor']), async (req, res) => {
     if (currentStateResult.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Produit non trouvé.' });
     }
-    // Cette logique permet d'archiver le produit au lieu de le supprimer définitivement
     const newActiveState = !currentStateResult.rows[0].is_active;
 
     await pool.query(
@@ -181,6 +170,65 @@ router.delete('/:id', checkRole(['admin', 'editor']), async (req, res) => {
     console.error("Erreur lors de l'archivage/restauration du produit:", error);
     res.status(500).json({ success: false, message: 'Erreur serveur.' });
   }
+});
+
+// @route   POST /api/products/:id/duplicate
+// @desc    Dupliquer un produit
+router.post('/:id/duplicate', checkRole(['admin', 'editor']), async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const originalProductRes = await client.query('SELECT * FROM products WHERE id = $1', [id]);
+        if (originalProductRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Produit original non trouvé.' });
+        }
+        const original = originalProductRes.rows[0];
+
+        const newReference = `${original.reference}-COPIE`;
+        const newName = `${original.name} - Copie`;
+        const newNameEn = original.name_en ? `${original.name_en} - Copy` : null;
+
+        const insertQuery = `
+            INSERT INTO products 
+            (reference, name, name_en, internal_label, description, description_en, product_type, unit_price_ht, daily_rate_ht, is_active, is_addon, addon_rule, addon_value, addon_basis_logiciel_id, addon_basis_service_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING *
+        `;
+        const newProductRes = await client.query(insertQuery, [
+            newReference, newName, newNameEn,
+            original.internal_label, original.description, original.description_en,
+            original.product_type, original.unit_price_ht, original.daily_rate_ht,
+            original.is_active, original.is_addon, original.addon_rule, original.addon_value,
+            original.addon_basis_logiciel_id, original.addon_basis_service_id
+        ]);
+        
+        await client.query('COMMIT');
+
+        const finalQuery = `
+          SELECT 
+            p.*,
+            l.nom as addon_basis_logiciel_name,
+            s.nom as addon_basis_service_name
+          FROM products p
+          LEFT JOIN ref_logiciels l ON p.addon_basis_logiciel_id = l.id
+          LEFT JOIN ref_services s ON p.addon_basis_service_id = s.id
+          WHERE p.id = $1
+        `;
+        const { rows } = await client.query(finalQuery, [newProductRes.rows[0].id]);
+        res.status(201).json({ success: true, data: rows[0], message: 'Produit dupliqué avec succès.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        if (error.code === '23505') { 
+          return res.status(409).json({ success: false, message: 'La référence générée pour la copie existe déjà. Veuillez modifier la référence du produit original ou de la copie avant de réessayer.' });
+        }
+        console.error("Erreur lors de la duplication du produit:", error);
+        res.status(500).json({ success: false, message: 'Erreur serveur.' });
+    } finally {
+        client.release();
+    }
 });
 
 module.exports = router;

@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useApi } from '@/hooks/useApi';
 import { useAuth } from '@/contexts/AuthContext';
-import { Printer, Send, CheckCircle, XCircle, Edit, FileText, ArrowLeft, AlertTriangle } from 'lucide-react';
+import { Printer, Send, CheckCircle, XCircle, Edit, FileText, ArrowLeft, AlertTriangle, Loader2 } from 'lucide-react';
 
 // --- Types de données ---
 interface QuoteItem {
@@ -35,6 +35,7 @@ interface QuoteDetails {
   total_ht_after_discount: string;
   total_tva: string;
   total_ttc: string;
+  tva_rate: string; // Ajout du taux de TVA
   sections: QuoteSection[];
   client_nom: string; 
   user_nom: string;
@@ -52,28 +53,30 @@ export default function QuoteDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const fetchQuoteDetails = async () => {
+  const fetchQuoteDetails = useCallback(async () => {
     if (!quoteId) return;
     try {
       setIsLoading(true);
-      const data = await api.get(`/quotes/${quoteId}`);
+      const { data } = await api.get(`/quotes/${quoteId}`);
       setQuote(data);
     } catch (err: any) {
       setError("Impossible de charger le devis. " + (err.message || 'Erreur inconnue'));
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [api, quoteId]);
 
   useEffect(() => {
-    fetchQuoteDetails();
-  }, [api, quoteId]);
+    if (quoteId) {
+        fetchQuoteDetails();
+    }
+  }, [quoteId, fetchQuoteDetails]);
 
   const handleStatusChange = async (newStatus: 'Envoyé' | 'Accepté' | 'Refusé') => {
     if (!quote) return;
     try {
       setNotification(null);
-      const updatedQuote = await api.put(`/quotes/${quote.id}/status`, { status: newStatus });
+      const { data: updatedQuote } = await api.put(`/quotes/${quote.id}/status`, { status: newStatus });
       setQuote(updatedQuote);
       setNotification({ message: `Devis marqué comme ${newStatus.toLowerCase()}.`, type: 'success' });
     } catch (err: any) {
@@ -84,13 +87,18 @@ export default function QuoteDetailPage() {
   const handleDownloadPDF = async () => {
     if (!quote) return;
     try {
+      // CORRECTION: Utilisation de fetch() standard pour gérer la réponse binaire (Blob)
+      // car le hook useApi est principalement configuré pour le JSON.
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/quotes/${quote.id}/pdf`, {
-        method: 'GET',
-        credentials: 'include',
+          method: 'GET',
+          // L'authentification est gérée par des cookies httpOnly, 'credentials: "include"' les envoie automatiquement.
+          credentials: 'include',
       });
 
       if (!response.ok) {
-        throw new Error('Erreur lors de la génération du PDF');
+          // Essayer de lire un message d'erreur si le backend en a envoyé un
+          const errorText = await response.text();
+          throw new Error(errorText || `Erreur lors de la génération du PDF (HTTP ${response.status})`);
       }
 
       const blob = await response.blob();
@@ -108,19 +116,20 @@ export default function QuoteDetailPage() {
     }
   };
 
+
   const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString('fr-FR');
-  const formatCurrency = (amount: string) => `${parseFloat(amount).toFixed(2).replace('.', ',')} €`;
+  const formatCurrency = (amount: string | number) => `${parseFloat(String(amount)).toFixed(2).replace('.', ',')} €`;
 
   const getStatusInfo = (status: QuoteDetails['status']) => {
     switch (status) {
       case 'Accepté': return { class: 'bg-green-100 text-green-800 border-green-200', icon: <CheckCircle className="w-5 h-5 mr-2" /> };
       case 'Envoyé': return { class: 'bg-blue-100 text-blue-800 border-blue-200', icon: <Send className="w-5 h-5 mr-2" /> };
       case 'Refusé': return { class: 'bg-red-100 text-red-800 border-red-200', icon: <XCircle className="w-5 h-5 mr-2" /> };
-      case 'Brouillon': default: return { class: 'bg-gray-100 text-gray-800 border-gray-200', icon: <Edit className="w-5 h-5 mr-2" /> };
+      case 'Brouillon': default: return { class: 'bg-yellow-100 text-yellow-800 border-yellow-200', icon: <Edit className="w-5 h-5 mr-2" /> };
     }
   };
 
-  if (isLoading) return <div className="p-8 text-center">Chargement du devis...</div>;
+  if (isLoading) return <div className="p-8 text-center flex items-center justify-center"><Loader2 className="animate-spin w-6 h-6 mr-2" /> Chargement du devis...</div>;
   if (error) return <div className="p-8 text-center text-red-600 bg-red-50 border border-red-200 rounded-lg p-4">{error}</div>;
   if (!quote) return <div className="p-8 text-center">Devis non trouvé.</div>;
   
@@ -134,21 +143,23 @@ export default function QuoteDetailPage() {
     switch (quote.status) {
       case 'Brouillon':
         return (
-          <button onClick={() => handleStatusChange('Envoyé')} className="btn-modern btn-primary">
-            <Send className="w-4 h-4 mr-2"/>
-            Marquer comme envoyé
-          </button>
+          <>
+            <button onClick={() => router.push(`/quotes/${quote.id}/edit`)} className="btn-modern btn-primary">
+                <Edit className="w-4 h-4 mr-2"/> Modifier
+            </button>
+            <button onClick={() => handleStatusChange('Envoyé')} className="btn-modern btn-success">
+                <Send className="w-4 h-4 mr-2"/> Marquer comme envoyé
+            </button>
+          </>
         );
       case 'Envoyé':
         return (
           <>
             <button onClick={() => handleStatusChange('Accepté')} className="btn-modern btn-success">
-              <CheckCircle className="w-4 h-4 mr-2"/>
-              Marquer comme accepté
+              <CheckCircle className="w-4 h-4 mr-2"/> Accepté
             </button>
             <button onClick={() => handleStatusChange('Refusé')} className="btn-modern btn-danger">
-              <XCircle className="w-4 h-4 mr-2"/>
-              Marquer comme refusé
+              <XCircle className="w-4 h-4 mr-2"/> Refusé
             </button>
           </>
         );
@@ -162,19 +173,19 @@ export default function QuoteDetailPage() {
       <div className="max-w-5xl mx-auto">
 
         {notification && (
-          <div className={`mb-4 p-4 rounded-lg flex items-center ${notification.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            <AlertTriangle className="w-5 h-5 mr-3" />
+          <div className={`mb-4 p-4 rounded-lg flex items-center shadow-sm ${notification.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+            {notification.type === 'success' ? <CheckCircle className="w-5 h-5 mr-3" /> : <AlertTriangle className="w-5 h-5 mr-3" />}
             {notification.message}
-            <button onClick={() => setNotification(null)} className="ml-auto font-bold">X</button>
+            <button onClick={() => setNotification(null)} className="ml-auto text-xl font-light leading-none">&times;</button>
           </div>
         )}
 
-        <div className="mb-6 flex justify-between items-center">
+        <div className="mb-6 flex flex-wrap justify-between items-center gap-4">
            <button onClick={() => router.back()} className="btn-modern btn-secondary flex items-center">
             <ArrowLeft className="w-4 h-4 mr-2"/>
-            Retour
+            Retour à la liste
           </button>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button onClick={handleDownloadPDF} className="btn-modern btn-secondary">
               <Printer className="w-4 h-4 mr-2"/>
               Imprimer / PDF
@@ -192,8 +203,8 @@ export default function QuoteDetailPage() {
             </div>
             <div className="text-right">
               <h2 className="text-xl font-bold">RCS Europe</h2>
-              <p className="text-sm text-gray-600">Votre Adresse Complète</p>
-              <p className="text-sm text-gray-600">75000 Paris, France</p>
+              <p className="text-sm text-gray-600">15 rue de Berri</p>
+              <p className="text-sm text-gray-600">75008 Paris, France</p>
             </div>
           </header>
 
@@ -232,7 +243,7 @@ export default function QuoteDetailPage() {
                 <h4 className="font-bold text-lg bg-gray-50 p-3 rounded-t-lg">{section.title}</h4>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-200">
+                    <thead className="bg-gray-100">
                       <tr>
                         <th className="p-3 text-left font-semibold text-gray-600 w-1/2">Description</th>
                         <th className="p-3 text-center font-semibold text-gray-600">Qté</th>
@@ -274,7 +285,7 @@ export default function QuoteDetailPage() {
                 <span>{formatCurrency(quote.total_ht_after_discount)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">TVA (20%)</span>
+                <span className="text-gray-600">TVA ({parseFloat(quote.tva_rate)}%)</span>
                 <span>{formatCurrency(quote.total_tva)}</span>
               </div>
                <div className="flex justify-between font-bold text-xl bg-gray-100 p-3 rounded-lg">

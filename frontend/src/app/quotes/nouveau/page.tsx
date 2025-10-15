@@ -1,36 +1,36 @@
-// quotes/nouveau/page.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useApi } from '@/hooks/useApi';
-import { useAuth } from '@/contexts/AuthProvider';
 import useDebounce from '@/hooks/useDebounce';
-import { Plus, Trash2, Save, Search, X, Book, Edit, ArrowLeft, Loader2, ChevronsUpDown } from 'lucide-react';
+import { Plus, Trash2, Save, Search, X, Book, ArrowLeft, Loader2 } from 'lucide-react';
+import NotificationModal from '@/components/NotificationModal';
 
-// --- Types ---
+// --- Types (mis à jour) ---
 type ProductType = 'MATERIEL' | 'FORMATION' | 'PRESTATION_SERVICE' | 'ADDON' | 'LOGICIEL' | 'CUSTOM';
 type QuoteType = 'LICENCES_ABONNEMENTS' | 'MATERIEL_PRESTATIONS';
+type UnitOfMeasure = 'jour' | 'mois' | 'unité' | 'heure';
 
 interface Client { id: number; nom_radio: string; }
 interface SearchResult { id: number; name: string; reference: string; product_type: ProductType; source_type: 'product' | 'tariff_grid'; }
 
 interface QuoteItem {
-  id: string; // ID Côté client (temporaire)
+  id: string; 
   product_id: number | null;
   product_type: ProductType;
   source_type: 'product' | 'tariff_grid' | 'custom' | null;
   description: string;
   description_en: string;
   quantity: number;
-  unit_of_measure: 'jour' | 'mois' | 'unité';
+  unit_of_measure: UnitOfMeasure;
   unit_price_ht: number;
   line_discount_percentage: number;
   tva_rate: number;
 }
 
 interface QuoteSection {
-  id: string; // ID Côté client (temporaire)
+  id: string; 
   title: string;
   title_en: string;
   description: string;
@@ -41,7 +41,7 @@ interface QuoteSection {
 
 // --- Composants ---
 
-const ClientSearch = ({ onSelect, initialClient }: { onSelect: (client: Client | null) => void, initialClient: Client | null }) => {
+const ClientSearch = ({ onSelect, initialClient, clientInputRef }: { onSelect: (client: Client | null) => void, initialClient: Client | null, clientInputRef: React.Ref<HTMLInputElement> }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [results, setResults] = useState<Client[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -54,8 +54,8 @@ const ClientSearch = ({ onSelect, initialClient }: { onSelect: (client: Client |
     useEffect(() => {
         if (debouncedSearchTerm.length < 2) { setResults([]); return; }
         setIsLoading(true);
-        api.get(`/clients/search?term=${debouncedSearchTerm}`)
-            .then(data => setResults(data || []))
+        api.get(`/search/clients?term=${debouncedSearchTerm}`)
+            .then(data => setResults(data.data || []))
             .catch(err => console.error("Client search error:", err))
             .finally(() => setIsLoading(false));
     }, [debouncedSearchTerm, api]);
@@ -64,7 +64,29 @@ const ClientSearch = ({ onSelect, initialClient }: { onSelect: (client: Client |
         return <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg"><span className="font-semibold text-blue-800">{selectedClient.nom_radio}</span><button onClick={() => { setSelectedClient(null); onSelect(null); }} className="text-blue-600 hover:text-blue-800 text-sm font-semibold">Changer</button></div>;
     }
 
-    return <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /><input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Rechercher une radio..." className="w-full pl-10 pr-4 py-2 border rounded-lg"/>{isLoading && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">...</div>}{results.length > 0 && <ul className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">{results.map(client => <li key={client.id} onClick={() => { onSelect(client); setSelectedClient(client); setResults([]); }} className="px-4 py-2 hover:bg-gray-100 cursor-pointer">{client.nom_radio}</li>)}</ul>}</div>;
+    return (
+        <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input 
+                ref={clientInputRef}
+                type="text" 
+                value={searchTerm} 
+                onChange={(e) => setSearchTerm(e.target.value)} 
+                placeholder="Rechercher une radio..." 
+                className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+            />
+            {isLoading && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">...</div>}
+            {results.length > 0 && (
+                <ul className="absolute z-10 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    {results.map(client => (
+                        <li key={client.id} onClick={() => { onSelect(client); setSelectedClient(client); setResults([]); }} className="px-4 py-2 hover:bg-gray-100 cursor-pointer">
+                            {client.nom_radio}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
 };
 
 
@@ -91,6 +113,7 @@ export default function CreateQuotePage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const api = useApi();
+    const clientInputRef = useRef<HTMLInputElement>(null);
     
     const [quoteType, setQuoteType] = useState<QuoteType | null>(null);
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -104,6 +127,9 @@ export default function CreateQuotePage() {
     const [notes, setNotes] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string|null>(null);
+    
+    const [notification, setNotification] = useState<{ show: boolean; title: string; message: string; type: 'info' | 'warning' }>({ show: false, title: '', message: '', type: 'info' });
+
 
     useEffect(() => {
         const clientId = searchParams.get('clientId');
@@ -136,26 +162,33 @@ export default function CreateQuotePage() {
     };
     
     const handleSelectProduct = async (sectionId: string, itemId: string, product: SearchResult) => {
-        if (!selectedClient) {
-            alert("Veuillez d'abord sélectionner un client.");
+        if (!selectedClient && (product.product_type === 'LOGICIEL' || product.product_type === 'ADDON')) {
+            setNotification({
+                show: true,
+                title: 'Client requis',
+                message: "Veuillez sélectionner un client avant d'ajouter un produit à abonnement, car le prix peut en dépendre.",
+                type: 'warning'
+            });
+            clientInputRef.current?.focus();
             return;
         }
+
         try {
-            const priceData = await api.post('/quotes/lookup-product', {
-                clientId: selectedClient.id,
+            const { data } = await api.post('/quotes/lookup-product', {
+                clientId: selectedClient?.id,
                 itemId: product.id,
                 itemType: product.product_type
             });
-            handleUpdateItem(sectionId, itemId, 'product_id', priceData.product_id);
-            handleUpdateItem(sectionId, itemId, 'product_type', priceData.product_type);
+            handleUpdateItem(sectionId, itemId, 'product_id', data.product_id);
+            handleUpdateItem(sectionId, itemId, 'product_type', data.product_type);
             handleUpdateItem(sectionId, itemId, 'source_type', product.source_type);
-            handleUpdateItem(sectionId, itemId, 'description', priceData.description);
-            handleUpdateItem(sectionId, itemId, 'description_en', priceData.description_en);
-            handleUpdateItem(sectionId, itemId, 'unit_of_measure', priceData.unit_of_measure);
-            handleUpdateItem(sectionId, itemId, 'unit_price_ht', priceData.unit_price_ht);
+            handleUpdateItem(sectionId, itemId, 'description', data.description);
+            handleUpdateItem(sectionId, itemId, 'description_en', data.description_en);
+            handleUpdateItem(sectionId, itemId, 'unit_of_measure', data.unit_of_measure);
+            handleUpdateItem(sectionId, itemId, 'unit_price_ht', data.unit_price_ht);
         } catch (error: any) {
             console.error("Erreur de lookup prix:", error);
-            alert(`Erreur: ${error.message}`);
+            setNotification({ show: true, title: 'Erreur', message: error.message || "Impossible de récupérer le prix du produit.", type: 'warning' });
         }
     };
   
@@ -179,8 +212,8 @@ export default function CreateQuotePage() {
         setIsSaving(true);
         setError(null);
         try {
-            const initialQuote = await api.post('/quotes', { subject, client_id: selectedClient.id, quote_type: quoteType });
-            const quoteId = initialQuote.quoteId;
+            const { data } = await api.post('/quotes', { subject, client_id: selectedClient.id, quote_type: quoteType });
+            const quoteId = data.data.quoteId;
 
             const finalQuoteData = {
                 subject, client_id: selectedClient.id, quote_type: quoteType, emission_date: emissionDate, validity_date: validityDate || null,
@@ -200,6 +233,14 @@ export default function CreateQuotePage() {
 
     return (
         <div className="p-6 bg-slate-50 min-h-screen">
+            {notification.show && (
+                <NotificationModal
+                    type={notification.type}
+                    title={notification.title}
+                    message={notification.message}
+                    onClose={() => setNotification(prev => ({ ...prev, show: false }))}
+                />
+            )}
             <header className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-4">
                     <button onClick={() => router.back()} className="p-2 rounded-full hover:bg-slate-200"><ArrowLeft className="w-5 h-5" /></button>
@@ -218,7 +259,7 @@ export default function CreateQuotePage() {
                     <div className="bg-white p-4 rounded-lg shadow-sm border"><div className="flex justify-between items-center mb-4"><h3 className="font-bold text-slate-800">Contenu du devis</h3><button onClick={handleAddSection} className="inline-flex items-center justify-center gap-2 px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-slate-600 hover:bg-slate-700"><Plus className="w-4 h-4"/>Ajouter section</button></div><div className="space-y-4">{sections.map(s => <QuoteSectionComponent key={s.id} section={s} onUpdate={handleUpdateSection} onRemove={handleRemoveSection} onAddItem={handleAddItem} onUpdateItem={handleUpdateItem} onRemoveItem={handleRemoveItem} onSelectProduct={handleSelectProduct} quoteType={quoteType}/>)}</div></div>
                 </div>
                 <div className="space-y-6">
-                    <div className="bg-white p-4 rounded-lg shadow-sm border"><h3 className="font-bold mb-4">Informations Générales</h3><div className="space-y-4 text-sm"><div><label className="block font-medium text-slate-700 mb-1">Client*</label><ClientSearch onSelect={setSelectedClient} initialClient={initialClient} /></div><div><label className="block font-medium text-slate-700 mb-1">Objet du devis*</label><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full p-2 border rounded-lg" /></div><div className="grid grid-cols-2 gap-4"><div><label className="block font-medium text-slate-700 mb-1">Date d'émission</label><input type="date" value={emissionDate} onChange={(e) => setEmissionDate(e.target.value)} className="w-full p-2 border rounded-lg" /></div><div><label className="block font-medium text-slate-700 mb-1">Date de validité</label><input type="date" value={validityDate} onChange={(e) => setValidityDate(e.target.value)} className="w-full p-2 border rounded-lg" /></div></div></div></div>
+                    <div className="bg-white p-4 rounded-lg shadow-sm border"><h3 className="font-bold mb-4">Informations Générales</h3><div className="space-y-4 text-sm"><div><label className="block font-medium text-slate-700 mb-1">Client*</label><ClientSearch onSelect={setSelectedClient} initialClient={initialClient} clientInputRef={clientInputRef} /></div><div><label className="block font-medium text-slate-700 mb-1">Objet du devis*</label><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full p-2 border rounded-lg" /></div><div className="grid grid-cols-2 gap-4"><div><label className="block font-medium text-slate-700 mb-1">Date d'émission</label><input type="date" value={emissionDate} onChange={(e) => setEmissionDate(e.target.value)} className="w-full p-2 border rounded-lg" /></div><div><label className="block font-medium text-slate-700 mb-1">Date de validité</label><input type="date" value={validityDate} onChange={(e) => setValidityDate(e.target.value)} className="w-full p-2 border rounded-lg" /></div></div></div></div>
                     <div className="bg-white p-4 rounded-lg shadow-sm border"><h3 className="font-bold mb-4">Conditions & Notes</h3><div className="space-y-4 text-sm"><div><label className="block font-medium text-slate-700 mb-1">Conditions commerciales</label><textarea value={conditions} onChange={e => setConditions(e.target.value)} rows={4} className="w-full p-2 border rounded-lg"></textarea></div><div><label className="block font-medium text-slate-700 mb-1">Notes internes</label><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} className="w-full p-2 border rounded-lg"></textarea></div></div></div>
                     <div className="bg-white p-4 rounded-lg shadow-sm border sticky top-6"><h3 className="font-bold mb-4">Récapitulatif</h3><div className="space-y-2 text-sm">
                         {totals.total_uniques > 0 && <div className="flex justify-between"><span>Total Frais Uniques HT</span><span>{totals.total_uniques.toFixed(2)} €</span></div>}
@@ -242,7 +283,44 @@ const QuoteSectionComponent = ({ section, onUpdate, onRemove, onAddItem, onUpdat
 const QuoteItemComponent = ({ item, sectionId, onUpdate, onRemove, onSelectProduct, quoteType }: any) => {
     const [isSearching, setIsSearching] = useState(false);
     const lineTotal = useMemo(() => (item.quantity * item.unit_price_ht) * (1 - (item.line_discount_percentage / 100)), [item]);
-    return <tr className="border-b last:border-none hover:bg-white"><td className="p-2"><div className="flex flex-col"><textarea value={item.description} onChange={e => onUpdate(sectionId, item.id, 'description', e.target.value)} rows={item.description?.split('\n').length || 1} className="w-full p-1 border rounded bg-transparent focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Description..."/>{isSearching ? <ProductSearch onSelect={(p) => { onSelectProduct(sectionId, item.id, p); setIsSearching(false); }} quoteType={quoteType} /> : <button onClick={() => setIsSearching(true)} className="text-xs text-blue-600 hover:underline mt-1 flex items-center self-start"><Book className="w-3 h-3 mr-1"/>Catalogue</button>}</div></td><td className="p-2"><input type="number" value={item.quantity} onChange={e => onUpdate(sectionId, item.id, 'quantity', parseFloat(e.target.value))} className="w-16 p-1 text-right border rounded"/></td><td className="p-2"><select value={item.unit_of_measure} onChange={e => onUpdate(sectionId, item.id, 'unit_of_measure', e.target.value)} className="w-full p-1 border rounded"><option value="unité">Unité</option><option value="jour">Jour</option><option value="mois">Mois</option></select></td><td className="p-2"><input type="number" value={item.unit_price_ht} onChange={e => onUpdate(sectionId, item.id, 'unit_price_ht', parseFloat(e.target.value))} className="w-24 p-1 text-right border rounded"/></td><td className="p-2"><input type="number" value={item.line_discount_percentage} onChange={e => onUpdate(sectionId, item.id, 'line_discount_percentage', parseFloat(e.target.value))} className="w-16 p-1 text-right border rounded"/></td><td className="p-2 text-right font-semibold">{lineTotal.toFixed(2)} €</td><td className="p-2 text-center"><button onClick={() => onRemove(sectionId, item.id)} className="p-1 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-100"><Trash2 className="w-4 h-4"/></button></td></tr>;
+    
+    const availableUnits = useMemo(() => {
+        switch (item.product_type) {
+            case 'PRESTATION_SERVICE':
+            case 'FORMATION':
+                return ['unité', 'jour', 'heure'];
+            case 'MATERIEL':
+                return ['unité'];
+            case 'LOGICIEL':
+            case 'ADDON':
+                return ['mois'];
+            default:
+                return ['unité', 'jour', 'heure', 'mois'];
+        }
+    }, [item.product_type]);
+
+    return (
+        <tr className="border-b last:border-none hover:bg-white">
+            <td className="p-2">
+                <div className="flex flex-col">
+                    <textarea value={item.description} onChange={e => onUpdate(sectionId, item.id, 'description', e.target.value)} rows={item.description?.split('\n').length || 1} className="w-full p-1 border rounded bg-transparent focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Description..."/>
+                    {isSearching ? <ProductSearch onSelect={(p) => { onSelectProduct(sectionId, item.id, p); setIsSearching(false); }} quoteType={quoteType} /> : <button onClick={() => setIsSearching(true)} className="text-xs text-blue-600 hover:underline mt-1 flex items-center self-start"><Book className="w-3 h-3 mr-1"/>Catalogue</button>}
+                </div>
+            </td>
+            <td className="p-2"><input type="number" value={item.quantity} onChange={e => onUpdate(sectionId, item.id, 'quantity', parseFloat(e.target.value))} className="w-16 p-1 text-right border rounded"/></td>
+            <td className="p-2">
+                <select value={item.unit_of_measure} onChange={e => onUpdate(sectionId, item.id, 'unit_of_measure', e.target.value)} className="w-full p-1 border rounded">
+                    {availableUnits.map(unit => (
+                        <option key={unit} value={unit} className="capitalize">{unit}</option>
+                    ))}
+                </select>
+            </td>
+            <td className="p-2"><input type="number" value={item.unit_price_ht} onChange={e => onUpdate(sectionId, item.id, 'unit_price_ht', parseFloat(e.target.value))} className="w-24 p-1 text-right border rounded"/></td>
+            <td className="p-2"><input type="number" value={item.line_discount_percentage} onChange={e => onUpdate(sectionId, item.id, 'line_discount_percentage', parseFloat(e.target.value))} className="w-16 p-1 text-right border rounded"/></td>
+            <td className="p-2 text-right font-semibold">{lineTotal.toFixed(2)} €</td>
+            <td className="p-2 text-center"><button onClick={() => onRemove(sectionId, item.id)} className="p-1 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-100"><Trash2 className="w-4 h-4"/></button></td>
+        </tr>
+    );
 };
 
 const ProductSearch = ({ onSelect, quoteType }: { onSelect: (p: SearchResult) => void, quoteType: QuoteType }) => {
@@ -263,3 +341,4 @@ const ProductSearch = ({ onSelect, quoteType }: { onSelect: (p: SearchResult) =>
     
     return <div className="mt-2 relative"><div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" /><input type="text" value={term} onChange={e => setTerm(e.target.value)} placeholder="Rechercher un produit/tarif..." className="w-full pl-9 p-2 border rounded" autoFocus/>{loading && <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-slate-400"/>}</div>{results.length > 0 && <ul className="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">{results.map(p => <li key={`${p.source_type}-${p.id}`} onClick={() => onSelect(p)} className="px-4 py-2 hover:bg-slate-100 cursor-pointer"><div className="font-bold">{p.name} <span className="text-xs text-slate-500">({p.reference})</span></div><div className="text-xs text-slate-600 capitalize">{p.product_type.toLowerCase().replace('_', ' ')}</div></li>)}</ul>}</div>;
 };
+

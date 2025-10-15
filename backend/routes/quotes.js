@@ -86,11 +86,11 @@ router.post('/search-products', async (req, res) => {
         allResults.push(...productsResult.rows);
 
         if (quote_type === 'LICENCES_ABONNEMENTS') {
-            // CORRECTION: Remplacement de 'tariff_grid_lines' par 'tarifs_logiciels'
             const tarifsQuery = {
                 text: `
                     SELECT 
-                        tgl.id, 
+                        tgl.id,
+                        tgl.logiciel_id,
                         tgl.nom as reference,
                         tgl.nom as name, 
                         'LOGICIEL' as product_type,
@@ -119,7 +119,7 @@ router.post('/search-products', async (req, res) => {
 // @route   POST /api/quotes/lookup-product
 // @desc    Récupérer les détails et le prix d'un produit pour un client
 router.post('/lookup-product', async (req, res) => {
-    const { clientId, itemId, itemType } = req.body;
+    const { clientId, itemId, itemType, logicielId } = req.body; // Ajout de logicielId
 
     if (!clientId || !itemId || !itemType) {
         return res.status(400).json({ success: false, message: "clientId, itemId et itemType sont requis." });
@@ -129,35 +129,40 @@ router.post('/lookup-product', async (req, res) => {
         let resultData = {};
 
         if (itemType === 'LOGICIEL') {
+            if (!logicielId) {
+                 return res.status(400).json({ success: false, message: "logicielId est requis pour le type LOGICIEL." });
+            }
             const audienceRes = await pool.query('SELECT audience FROM audiences WHERE client_id = $1 ORDER BY vague_id DESC, created_at DESC LIMIT 1', [clientId]);
             const audience = audienceRes.rows.length > 0 ? audienceRes.rows[0].audience : 0;
             
-            // CORRECTION: Remplacement de 'tariff_grid_lines' par 'tarifs_logiciels'
             const tarifRes = await pool.query(
                 `SELECT * FROM tarifs_logiciels 
-                 WHERE id = $1 
+                 WHERE logiciel_id = $1 
                    AND (audience_min IS NULL OR audience_min <= $2)
                    AND (audience_max IS NULL OR audience_max >= $2)
                    AND is_active = true
                  ORDER BY audience_min DESC NULLS LAST, audience_max ASC NULLS LAST
-                 LIMIT 1`, [itemId, audience]
+                 LIMIT 1`, [logicielId, audience]
             );
 
             if (tarifRes.rows.length === 0) {
-                 // CORRECTION: Remplacement de 'tariff_grid_lines' par 'tarifs_logiciels'
                  const genericTarifRes = await pool.query(
-                    `SELECT * FROM tarifs_logiciels WHERE id = $1 AND audience_min IS NULL AND audience_max IS NULL AND is_active = true`,
-                    [itemId]
+                    `SELECT tl.*, rl.name_en as logiciel_name_en FROM tarifs_logiciels tl
+                     JOIN ref_logiciels rl ON tl.logiciel_id = rl.id
+                     WHERE tl.logiciel_id = $1 AND tl.audience_min IS NULL AND tl.audience_max IS NULL AND tl.is_active = true`,
+                    [logicielId]
                 );
                 if (genericTarifRes.rows.length === 0) {
                     return res.status(404).json({ success: false, message: "Aucun tarif applicable trouvé pour ce client ou produit." });
                 }
                 const tarif = genericTarifRes.rows[0];
-                resultData = { product_id: tarif.id, product_type: 'LOGICIEL', description: tarif.nom, description_en: tarif.description_en, unit_of_measure: 'mois', unit_price_ht: parseFloat(tarif.prix_mensuel_ht) };
+                resultData = { product_id: tarif.logiciel_id, product_type: 'LOGICIEL', source_type: 'tariff_grid', description: tarif.nom, description_en: tarif.description_en || tarif.logiciel_name_en, unit_of_measure: 'mois', unit_price_ht: parseFloat(tarif.prix_mensuel_ht) };
 
             } else {
                 const tarif = tarifRes.rows[0];
-                resultData = { product_id: tarif.id, product_type: 'LOGICIEL', description: tarif.nom, description_en: tarif.description_en, unit_of_measure: 'mois', unit_price_ht: parseFloat(tarif.prix_mensuel_ht) };
+                const logicielNameRes = await pool.query('SELECT name_en FROM ref_logiciels WHERE id = $1', [tarif.logiciel_id]);
+                const logiciel_name_en = logicielNameRes.rows.length > 0 ? logicielNameRes.rows[0].name_en : null;
+                resultData = { product_id: tarif.logiciel_id, product_type: 'LOGICIEL', source_type: 'tariff_grid', description: tarif.nom, description_en: tarif.description_en || logiciel_name_en, unit_of_measure: 'mois', unit_price_ht: parseFloat(tarif.prix_mensuel_ht) };
             }
 
         } else { // MATERIEL, FORMATION, PRESTATION_SERVICE, ADDON
@@ -182,7 +187,6 @@ router.post('/lookup-product', async (req, res) => {
                     const audienceRes = await pool.query('SELECT audience FROM audiences WHERE client_id = $1 ORDER BY vague_id DESC, created_at DESC LIMIT 1', [clientId]);
                     const audience = audienceRes.rows.length > 0 ? audienceRes.rows[0].audience : 0;
 
-                    // CORRECTION: Remplacement de 'tariff_grid_lines' par 'tarifs_logiciels'
                     const tarifRes = await pool.query(
                         `SELECT prix_mensuel_ht FROM tarifs_logiciels 
                          WHERE logiciel_id = $1 AND (audience_min IS NULL OR audience_min <= $2) AND (audience_max IS NULL OR audience_max >= $2) AND is_active = true
@@ -200,6 +204,7 @@ router.post('/lookup-product', async (req, res) => {
             resultData = {
                 product_id: product.id,
                 product_type: product.product_type,
+                source_type: 'product',
                 description: product.name,
                 description_en: product.name_en,
                 unit_of_measure,
@@ -232,7 +237,7 @@ router.post('/', checkRole(['admin', 'editor']), async (req, res) => {
     const quote_number = await getNextQuoteNumber();
     const quoteQuery = `
       INSERT INTO quotes (quote_number, subject, client_id, user_id, quote_type, status)
-      VALUES ($1, $2, $3, $4, $5, 'En cours')
+      VALUES ($1, $2, $3, $4, $5, 'Brouillon')
       RETURNING id;
     `;
     const quoteResult = await client.query(quoteQuery, [quote_number, subject, client_id, user_id, quote_type]);
@@ -299,6 +304,7 @@ router.put('/:id', checkRole(['admin', 'editor']), async (req, res) => {
         `;
         await client.query(quoteQuery, [subject, client_id, emission_date, validity_date, global_discount_percentage, notes_internes, conditions_commerciales, total_uniques_ht_brut, total_ht_after_discount, total_tva, total_ttc, total_mensuel_ht, quote_type, id]);
 
+        await client.query('DELETE FROM quote_items WHERE section_id IN (SELECT id FROM quote_sections WHERE quote_id = $1)', [id]);
         await client.query('DELETE FROM quote_sections WHERE quote_id = $1', [id]);
         
         for (const section of sections) {
@@ -332,6 +338,42 @@ router.put('/:id', checkRole(['admin', 'editor']), async (req, res) => {
     }
 });
 
+// @route   PUT /api/quotes/:id/status
+// @desc    Mettre à jour le statut d'un devis
+router.put('/:id/status', checkRole(['admin', 'editor']), async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    const allowedStatus = ['Brouillon', 'Envoyé', 'Accepté', 'Refusé'];
+
+    if (!status || !allowedStatus.includes(status)) {
+        return res.status(400).json({ success: false, message: 'Statut invalide fourni.' });
+    }
+
+    try {
+        const { rows } = await pool.query(
+            'UPDATE quotes SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+            [status, id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Devis non trouvé.' });
+        }
+        
+        // Pour être cohérent avec la route GET /:id, nous ajoutons les informations manquantes
+        const quote = rows[0];
+        const clientRes = await pool.query('SELECT nom_radio FROM clients WHERE id = $1', [quote.client_id]);
+        const userRes = await pool.query('SELECT nom FROM users WHERE id = $1', [quote.user_id]);
+        quote.client_nom = clientRes.rows[0]?.nom_radio;
+        quote.user_nom = userRes.rows[0]?.nom;
+        
+        res.json({ success: true, data: quote, message: 'Statut du devis mis à jour.' });
+    } catch (error) {
+        console.error("Erreur lors de la mise à jour du statut du devis:", error);
+        res.status(500).json({ success: false, message: 'Erreur serveur.' });
+    }
+});
+
+
 // @route   GET /api/quotes
 // @desc    Liste de tous les devis
 router.get('/', async (req, res) => {
@@ -340,8 +382,8 @@ router.get('/', async (req, res) => {
       SELECT q.id, q.quote_number, q.subject, q.status, q.emission_date, q.total_ttc, q.total_mensuel_ht,
              u.nom as user_nom, c.nom_radio as client_nom
       FROM quotes q
-      JOIN users u ON q.user_id = u.id
-      JOIN clients c ON q.client_id = c.id
+      LEFT JOIN users u ON q.user_id = u.id
+      LEFT JOIN clients c ON q.client_id = c.id
       ORDER BY q.emission_date DESC, q.id DESC
     `);
     res.json({ success: true, data: rows });
@@ -359,18 +401,24 @@ router.get('/:id', async (req, res, next) => {
         return next(); 
     }
     try {
-        const quoteRes = await pool.query("SELECT q.*, c.nom_radio as client_nom, u.nom as user_nom FROM quotes q JOIN clients c ON q.client_id = c.id JOIN users u ON q.user_id = u.id WHERE q.id = $1", [id]);
+        const quoteRes = await pool.query("SELECT q.*, c.nom_radio as client_nom, u.nom as user_nom FROM quotes q LEFT JOIN clients c ON q.client_id = c.id LEFT JOIN users u ON q.user_id = u.id WHERE q.id = $1", [id]);
         if (quoteRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Devis non trouvé.' });
         
         const quote = quoteRes.rows[0];
         const sectionsRes = await pool.query('SELECT * FROM quote_sections WHERE quote_id = $1 ORDER BY display_order', [id]);
         const sections = sectionsRes.rows;
 
+        let tvaRate = '20.00'; // Fallback
         for (const section of sections) {
-            const itemsRes = await pool.query('SELECT * FROM quote_items WHERE section_id = $1 ORDER BY display_order', [section.id]);
+            const itemsRes = await pool.query('SELECT *, CAST(total_ht / quantity / unit_price_ht AS numeric) as total_ht_after_discount FROM quote_items WHERE section_id = $1', [section.id]);
             section.items = itemsRes.rows;
+            if (section.items.length > 0 && section.items[0].tva_rate) {
+                tvaRate = section.items[0].tva_rate;
+            }
         }
         quote.sections = sections;
+        quote.tva_rate = tvaRate;
+
         res.json({ success: true, data: quote });
     } catch (error) {
         console.error("Erreur récupération devis:", error);
@@ -410,4 +458,3 @@ router.get('/:id/pdf', async (req, res) => {
 });
 
 module.exports = router;
-
